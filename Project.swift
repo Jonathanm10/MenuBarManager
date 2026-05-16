@@ -24,8 +24,8 @@ let project = Project(
             infoPlist: .extendingDefault(with: [
                 "CFBundleDisplayName": "MenuBarManager",
                 "CFBundleIconName": "AppIcon",
-                "CFBundleShortVersionString": "0.1.0",
-                "CFBundleVersion": "1",
+                "CFBundleShortVersionString": "$(MARKETING_VERSION)",
+                "CFBundleVersion": "$(CURRENT_PROJECT_VERSION)",
                 "LSUIElement": true,
                 "NSHighResolutionCapable": true,
                 "NSSupportsAutomaticTermination": false,

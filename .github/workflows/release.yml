@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, for example v0.1.0"
+        required: true
+
+jobs:
+  release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    env:
+      APP_NAME: MenuBarManager
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install Tuist runtime
+        run: |
+          set -euo pipefail
+          if ! command -v tuist >/dev/null 2>&1 && ! command -v mise >/dev/null 2>&1; then
+            brew install mise
+          fi
+
+      - name: Check release signing secrets
+        id: signing
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_P12_BASE64 }}
+          CERT_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_P12_PASSWORD }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$CERT_P12_BASE64" \
+             && -n "$CERT_P12_PASSWORD" \
+             && -n "$ASC_API_KEY_P8_BASE64" \
+             && -n "$ASC_API_KEY_ID" \
+             && -n "$ASC_API_ISSUER_ID" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write App Store Connect API key
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          echo "$ASC_API_KEY_P8_BASE64" | base64 -d > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.available == 'true'
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_P12_BASE64 }}
+          CERT_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERT_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "$CERT_P12_BASE64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Resolve signing identity
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          IDENTITY_SHA="$(security find-identity -v -p codesigning | awk '/Developer ID Application/{print $2; exit}')"
+          if [[ -z "$IDENTITY_SHA" ]]; then
+            echo "No Developer ID Application identity found in keychain" >&2
+            security find-identity -v -p codesigning >&2
+            exit 1
+          fi
+          echo "MENUBAR_MANAGER_RELEASE_CODE_SIGN_IDENTITY=$IDENTITY_SHA" >> "$GITHUB_ENV"
+
+      - name: Build, package, and create DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ./Scripts/create_dmg.sh
+
+      - name: Resolve DMG path
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "DMG=release/$APP_NAME-$VERSION.dmg" >> "$GITHUB_ENV"
+
+      - name: Notarize and staple app bundle
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          APP_ZIP="$RUNNER_TEMP/$APP_NAME.zip"
+          /usr/bin/ditto -c -k --keepParent ".build/release/$APP_NAME.app" "$APP_ZIP"
+          xcrun notarytool submit "$APP_ZIP" \
+            --key "$ASC_KEY_PATH" \
+            --key-id "$ASC_API_KEY_ID" \
+            --issuer "$ASC_API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple ".build/release/$APP_NAME.app"
+          xcrun stapler validate ".build/release/$APP_NAME.app"
+          rm -f "$APP_ZIP"
+
+      - name: Recreate notarized DMG
+        if: steps.signing.outputs.available == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SKIP_PACKAGE: "1"
+        run: ./Scripts/create_dmg.sh
+
+      - name: Sign and notarize DMG
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          codesign --force --timestamp --sign "$MENUBAR_MANAGER_RELEASE_CODE_SIGN_IDENTITY" "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --key "$ASC_KEY_PATH" \
+            --key-id "$ASC_API_KEY_ID" \
+            --issuer "$ASC_API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Create or update GitHub Release
+        if: steps.signing.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" --clobber
+          else
+            gh release create "$TAG" "$DMG" \
+              --title "$TAG" \
+              --generate-notes
+          fi
+
+      - name: Report unsigned artifact
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          echo "Signing/notarization secrets are missing."
+          echo "The unsigned DMG was kept as a workflow artifact, but was not uploaded to GitHub Releases."
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MenuBarManager-dmg
+          path: release/*.dmg
+
+      - name: Clean up secrets
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain" || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" || true

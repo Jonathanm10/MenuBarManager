@@ -45,6 +45,35 @@ Download `MenuBarManager.dmg` from [GitHub Releases](https://github.com/Jonathan
 
 The app is designed to be distributed as a DMG. If no release is published yet, use the source build flow below.
 
+## Release Build
+
+Create a local release DMG in `release/`:
+
+```bash
+VERSION=0.1.0 BUILD_NUMBER=1 ./Scripts/create_dmg.sh
+```
+
+This creates both `release/MenuBarManager-0.1.0.dmg` and a stable copy at `release/MenuBarManager.dmg`. The packaged app bundle is kept at `.build/release/MenuBarManager.app`.
+
+For a signed Developer ID build, make sure the certificate is available in your keychain, or set the identity explicitly:
+
+```bash
+MENUBAR_MANAGER_RELEASE_CODE_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  VERSION=0.1.0 BUILD_NUMBER=1 ./Scripts/create_dmg.sh
+```
+
+The GitHub Actions release workflow runs on `v*` tags. If the signing and App Store Connect secrets are present, it signs, notarizes, staples, and uploads the DMG to the matching GitHub Release. Without those secrets, the workflow still produces a DMG artifact, but does not publish that unsigned build to GitHub Releases; use the local script and upload manually if you intentionally want that path.
+
+Required secrets for signed/notarized GitHub releases:
+
+| Secret | Purpose |
+| --- | --- |
+| `DEVELOPER_ID_APPLICATION_CERT_P12_BASE64` | Base64-encoded Developer ID Application certificate. |
+| `DEVELOPER_ID_APPLICATION_CERT_P12_PASSWORD` | Password for that `.p12` certificate. |
+| `ASC_API_KEY_P8_BASE64` | Base64-encoded App Store Connect API key. |
+| `ASC_API_KEY_ID` | App Store Connect API key ID. |
+| `ASC_API_ISSUER_ID` | App Store Connect issuer ID. |
+
 ## Usage
 
 1. Launch `MenuBarManager`.
@@ -145,4 +174,3 @@ Resources/    App icon and bundled assets
 - macOS 14 or newer
 - Xcode with the macOS SDK
 - Tuist, or `mise` so the scripts can run Tuist automatically
-
