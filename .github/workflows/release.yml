@@ -17,6 +17,7 @@ jobs:
       contents: write
     env:
       APP_NAME: MenuBarManager
+      GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out repository
