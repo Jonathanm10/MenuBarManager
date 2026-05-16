@@ -158,6 +158,7 @@ jobs:
             --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
+          cp "$DMG" "release/$APP_NAME.dmg"
 
       - name: Create or update GitHub Release
         if: steps.signing.outputs.available == 'true'
