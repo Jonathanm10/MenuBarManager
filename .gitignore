@@ -1,0 +1,12 @@
+.build/
+.clawpatch/*
+!.clawpatch/config.json
+.derivedData/
+.swiftpm/
+Derived/
+DerivedData/
+*.xcworkspace/
+*.xcodeproj/
+*.xcuserstate
+xcuserdata/
+*.log
