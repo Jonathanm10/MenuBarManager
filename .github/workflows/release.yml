@@ -167,9 +167,9 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$DMG" --clobber
+            gh release upload "$TAG" "$DMG" "release/$APP_NAME.dmg" --clobber
           else
-            gh release create "$TAG" "$DMG" \
+            gh release create "$TAG" "$DMG" "release/$APP_NAME.dmg" \
               --title "$TAG" \
               --generate-notes
           fi
